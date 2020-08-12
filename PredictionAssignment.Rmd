@@ -1,0 +1,116 @@
+---
+title: "Prediction assignment"
+author: "Patrick Neumann"
+date: "8/12/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE, message = FALSE, warning = FALSE)
+library(caret)
+library(dplyr)
+library(scales)
+```
+
+```{r getdata, cache=TRUE}
+urlbase <- 'https://d396qusza40orc.cloudfront.net/predmachlearn/'
+file_training <- "pml-training.csv"
+file_testing <- "pml-testing.csv"
+download.file(paste(urlbase, file_training, sep=""), file_training)
+download.file(paste(urlbase, file_testing, sep=""), file_testing)
+download.date <- Sys.time()
+```
+## Summary
+Using devices such as Jawbone Up, Nike FuelBand, and Fitbit it is now possible to collect a large amount of data about personal activity relatively inexpensively. These type of devices are part of the quantified self movement – a group of enthusiasts who take measurements about themselves regularly to improve their health, to find patterns in their behavior, or because they are tech geeks. One thing that people regularly do is quantify how much of a particular activity they do, but they rarely quantify how well they do it. 
+
+This project will be to use data from accelerometers on the belt, forearm, arm, and dumbell of 6 participants in order to predict the type of movement.
+
+The data for this project come from this source: http://web.archive.org/web/20161224072740/http:/groupware.les.inf.puc-rio.br/har.
+
+
+## Data Exploration
+
+The data was downloaded from `r urlbase` on `r download.date`.
+
+```{r}
+training_raw <- read.csv("pml-training.csv")
+testing_raw <- read.csv("pml-testing.csv")
+library(dplyr)
+
+dim(training_raw)
+dim(testing_raw)
+complete_cases <- sum(complete.cases(training_raw))
+```
+A first look at the data shows that we have a training set `r nrow(training_raw)` data points and a testing set with `r nrow(testing_raw)` entries. There is a total number of `r ncol(training_raw)` columns in the data.
+
+There are only `r complete_cases` in our training set. The next section will address the missing data.
+
+### Missing Data
+```{r}
+na_count <-sapply(training_raw, function(y) sum(length(which(is.na(y)))))
+#calculate percentage of NAs per column
+na_count <- na_count/nrow(training_raw)
+na_count <- data.frame(na_count)
+na_count <- filter(na_count,na_count>0.5)
+na_count
+
+empty_count <-sapply(training_raw, function(y) sum(length(which("" == y))))
+#calculate percentage of empty chars per column
+empty_count <- empty_count/nrow(training_raw)
+empty_count <- data.frame(empty_count)
+empty_count <- filter(empty_count, empty_count>0.5)
+empty_count
+```
+
+### Data Cleaning
+```{r, cleanfunction}
+columns_to_remove <- c(row.names(na_count), row.names(empty_count))
+
+cleanfunction <- function(x) {
+    #create a factor out of the classe variable in order to do appropiate predictions
+    cleaned <- mutate(x, classe = as.factor(classe))
+    #remove the columns that largely contain no or no valid data
+    cleaned <- select(cleaned, -columns_to_remove)
+    #Also remove columns that are clearly not related to predict movements
+    cleaned <- select(cleaned, -grep("^X|timestamp|window|user_name", names(training_raw), value = TRUE))
+    
+    cleaned
+}
+```
+
+```{r}
+training_clean <- cleanfunction(training_raw)
+dim(training_clean)
+sum(complete.cases(training_clean))
+```
+
+After removing the columns with missing data and converting the *classe* field into a factor to do appropiate predictions our data set has left `r ncol(training_clean)` with 'r sum(complete.cases(training_clean))' complete cases.
+All data cleaning was wrapped into a function that can also be used on the testing data later in order to assure the testing data set underwent the same transformations.
+
+### Model Building
+In order to do an out of sample error prediction later the test data set is divided into a test and validation set.
+```{r}
+set.seed(123794)
+inTrain = createDataPartition(training_clean$classe, p = 0.7)[[1]]
+training = training_clean[ inTrain,]
+validation = training_clean[-inTrain,]
+```
+We select a random forest prediction model, since it can handle a large number of input variables and can automatically select important variables.
+Additionally we are applying a 5-fold cross validation in order to improve the out of sampe error rate.
+```{r, predictionmodel, cache=TRUE}
+# defining training control 
+# as cross-validation and  
+# value of K equal to 5 
+train_control <- trainControl(method = "cv", 
+                              number = 5) 
+set.seed(383743)
+model <- train(classe ~., data = training, method='rf', trControl = train_control)
+model
+```
+In order to calculate the out of sample error rate, we calculate the confusion matrix for our validation data set.
+```{r}
+predictions <- predict(model, validation)
+cm <- confusionMatrix(validation$classe, predictions)
+cm
+```
+The estimated out of sample error is `r percent(1-cm$overall[1], accuracy = 0.01)`, e.g. the predicted accuracy is `r percent(cm$overall[1], accuracy = 0.01)`.
